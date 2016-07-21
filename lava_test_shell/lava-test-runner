@@ -48,6 +48,10 @@ cleanup()
 }
 trap cleanup INT TERM EXIT
 
+# Add shebang line for lava-test-case to fix
+# OSError: [Errno 8] Exec format error using subprocess.call()
+sed -i '1s/^/#!\/bin\/sh\n/' ${BINDIR}/lava-test-case
+
 export PATH=${BINDIR}:${PATH}
 echo "${PREFIX} started"
 mkdir -p ${RESULTSDIR}

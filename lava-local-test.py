@@ -15,9 +15,10 @@ from uuid import uuid4
 HOME = os.environ['HOME']
 LAVA_PATH = HOME + '/lava_output'
 git_repo = 'https://git.linaro.org/qa/test-definitions.git'
-test_def = 'ubuntu/openssl.yaml'
+test_def = 'ubuntu/blogbench.yaml'
+# test_def = 'ubuntu/pi-stress-test.yaml'
 # test_def = 'ubuntu/smoke-tests-basic.yaml'
-
+test_timeout = 7200
 
 class TestDefinition(object):
     """
@@ -30,6 +31,7 @@ class TestDefinition(object):
         # Read the YAML to create a testdef dict
         with open(self.test_def, 'r') as f:
             self.testdef = yaml.safe_load(f)
+        self.parameters =  self.parameters()
 
     def definition(self):
         with open('%s/testdef.yaml' % self.test_path, 'w') as f:
@@ -40,10 +42,50 @@ class TestDefinition(object):
             f.write(yaml.dump(self.testdef['metadata'], encoding='utf-8', allow_unicode=True))
 
     def install(self):
-        pass
+        if 'install' not in self.testdef:
+            return
+
+        install_options = self.testdef['install']
+        with open('%s/install.sh' % self.test_path, 'w') as f:
+            if self.parameters:
+                for line in self.parameters:
+                    f.write(line)
+
+            f.write('###install deps/steps/git-repos defined in test definition###\n')
+
+            if 'deps' in install_options:
+                deps = self.testdef['install'].get('deps', [])
+                if deps:
+                    # TODO: distro-specific dependencies
+                    f.write('lava-install-packages ')
+                    for dep in deps:
+                        f.write('%s ' % dep)
+                    f.write('\n')
+
+            if 'steps' in install_options:
+                steps = self.testdef['install'].get('steps', [])
+                if steps:
+                    for cmd in steps:
+                        f.write('%s\n' % cmd)
+
+            if 'git-repos' in install_options:
+                git_repos = self.testdef['install'].get('git-repos', [])
+                if git_repos:
+                    for repo in git_repos:
+                        if url in repo:
+                            url = repo['url']
+                            if branch in repo:
+                                branch = repo['branch']
+                                f.write('git clone -b %s %s\n' % (url, branch))
+                            else:
+                                f.write('git clone %s\n' % url)
 
     def run(self):
         with open('%s/run.sh' % self.test_path, 'a') as f:
+            if self.parameters:
+                for line in self.parameters:
+                    f.write(line)
+
             f.write('set -e\n')
             f.write('export TESTRUN_ID=%s\n' % self.testdef['metadata']['name'])
             f.write('cd %s\n' % self.test_path)
@@ -58,7 +100,24 @@ class TestDefinition(object):
             f.write('echo "<LAVA_SIGNAL_ENDRUN $TESTRUN_ID $UUID>"\n')
 
     def parameters(self):
-        pass
+        ret_val = ['###default parameters from test definition###\n']
+
+        if 'params' in self.testdef:
+            for def_param_name, def_param_value in list(self.testdef['params'].items()):
+                # ?'yaml_line'
+                if def_param_name is 'yaml_line':
+                    continue
+                ret_val.append('%s=\'%s\'\n' % (def_param_name, def_param_value))
+        elif 'parameters' in self.testdef:
+            for def_param_name, def_param_value in list(self.testdef['parameters'].items()):
+                if def_param_name is 'yaml_line':
+                    continue
+                ret_val.append('%s=\'%s\'\n' % (def_param_name, def_param_value))
+        else:
+            return None
+
+        ret_val.append('######\n')
+        return ret_val
 
     def return_pattern(self):
         if 'parse' in self.testdef:
@@ -103,17 +162,25 @@ class TestRunner(object):
     def __init__(self):
         self.lava_path = LAVA_PATH
         self.test_uuid = test_uuid
-        print('\n About to run %s' % self.test_uuid)
+        self.test_timeout = test_timeout
+        print('\nAbout to run %s' % self.test_uuid)
         self.child = pexpect.spawn('%s/bin/lava-test-runner %s' % (self.lava_path, self.lava_path))
 
     def check_output(self):
+        timeout = time.time() + self.test_timeout
         while True:
             try:
                 self.child.expect('\n')
                 print(self.child.before)
+            except pexpect.TIMEOUT:
+                if time.time() > timeout:
+                    print('%s test timed out.\n' % self.test_uuid)
+                    break
+                else:
+                    continue
             except pexpect.EOF:
+                print('%s test finished.\n' % self.test_uuid)
                 break
-        print('%s test finished.\n' % self.test_uuid)
 
 
 class ResultPaser(object):
@@ -144,19 +211,19 @@ class ResultPaser(object):
             for line in f:
                 if re.match(r'\<LAVA_SIGNAL_TESTCASE TEST_CASE_ID=.*', line):
                     line = line.strip('\n').strip('<>').split(' ')
-                    self.data = {'test_case_id': '',
-                                 'result': '',
-                                 'measurement': '',
-                                 'units': ''}
+                    data = {'test_case_id': '',
+                            'result': '',
+                            'measurement': '',
+                            'units': ''}
 
                     for string in line:
                         parts = string.split('=')
                         if len(parts) == 2:
                             key, value = parts
                             key = key.lower()
-                            self.data[key] = value
+                            data[key] = value
 
-                    self.metrics.append(self.data.copy())
+                    self.metrics.append(data.copy())
 
         self.results['metrics'] = self.metrics
 
@@ -164,16 +231,16 @@ class ResultPaser(object):
         print self.pattern
         with open('%s/stdout.log' % self.result_path, 'r') as f:
             for line in f:
-                self.data = {}
+                data = {}
                 m = re.match(r'%s' % self.pattern, line)
                 if m:
-                    self.data = m.groupdict()
+                    data = m.groupdict()
 
                     for x in ['measurement', 'units']:
-                        if x not in self.data:
-                            self.data[x] = ''
+                        if x not in data:
+                            data[x] = ''
 
-                    self.metrics.append(self.data.copy())
+                    self.metrics.append(data.copy())
 
         self.results['metrics'] = self.metrics
 
@@ -191,7 +258,7 @@ class ResultPaser(object):
                 writer.writerow(metric)
 
 
-# Pre-config.
+# Test config.
 uuid = str(uuid4())
 test_name = os.path.splitext(test_def.split('/')[-1])[0]
 test_uuid = test_name + '_' + uuid
@@ -222,6 +289,6 @@ pattern = test_def.return_pattern()
 test_run = TestRunner()
 test_run.check_output()
 
-# Parse test output, save to csv file.
+# Parse test output, save results in json and csv format.
 parser = ResultPaser()
 parser.run()
