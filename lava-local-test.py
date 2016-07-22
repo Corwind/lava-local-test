@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import sys
 import os
 import glob
@@ -9,16 +10,9 @@ import json
 import csv
 import subprocess
 import pexpect
+import argparse
 from uuid import uuid4
 
-
-HOME = os.environ['HOME']
-LAVA_PATH = HOME + '/lava_output'
-git_repo = 'https://git.linaro.org/qa/test-definitions.git'
-test_def = 'ubuntu/blogbench.yaml'
-# test_def = 'ubuntu/pi-stress-test.yaml'
-# test_def = 'ubuntu/smoke-tests-basic.yaml'
-test_timeout = 7200
 
 class TestDefinition(object):
     """
@@ -31,7 +25,8 @@ class TestDefinition(object):
         # Read the YAML to create a testdef dict
         with open(self.test_def, 'r') as f:
             self.testdef = yaml.safe_load(f)
-        self.parameters =  self.parameters()
+        self.parameters = self.parameters()
+        self.skip_install = skip_install
 
     def definition(self):
         with open('%s/testdef.yaml' % self.test_path, 'w') as f:
@@ -44,6 +39,8 @@ class TestDefinition(object):
     def install(self):
         if 'install' not in self.testdef:
             return
+        if self.skip_install:
+            return
 
         install_options = self.testdef['install']
         with open('%s/install.sh' % self.test_path, 'w') as f:
@@ -51,7 +48,20 @@ class TestDefinition(object):
                 for line in self.parameters:
                     f.write(line)
 
+            f.write('set -e\n')
+            f.write('cd %s\n' % self.test_path)
             f.write('###install deps/steps/git-repos defined in test definition###\n')
+
+            if 'git-repos' in install_options:
+                git_repos = self.testdef['install'].get('git-repos', [])
+                if git_repos:
+                    for repo in git_repos:
+                        if 'url' in repo:
+                            url = repo['url']
+                            if 'branch' in repo and repo['branch'] == 'BRANCH':
+                                f.write('git clone -b "$BRANCH" %s\n' % url)
+                            else:
+                                f.write('git clone %s\n' % url)
 
             if 'deps' in install_options:
                 deps = self.testdef['install'].get('deps', [])
@@ -67,18 +77,6 @@ class TestDefinition(object):
                 if steps:
                     for cmd in steps:
                         f.write('%s\n' % cmd)
-
-            if 'git-repos' in install_options:
-                git_repos = self.testdef['install'].get('git-repos', [])
-                if git_repos:
-                    for repo in git_repos:
-                        if url in repo:
-                            url = repo['url']
-                            if branch in repo:
-                                branch = repo['branch']
-                                f.write('git clone -b %s %s\n' % (url, branch))
-                            else:
-                                f.write('git clone %s\n' % url)
 
     def run(self):
         with open('%s/run.sh' % self.test_path, 'a') as f:
@@ -167,14 +165,17 @@ class TestRunner(object):
         self.child = pexpect.spawn('%s/bin/lava-test-runner %s' % (self.lava_path, self.lava_path))
 
     def check_output(self):
-        timeout = time.time() + self.test_timeout
-        while True:
+        if self.test_timeout:
+            print('Test timeout: %s' % self.test_timeout)
+            test_end = time.time() + self.test_timeout
+        while self.child.isalive():
             try:
                 self.child.expect('\n')
                 print(self.child.before)
             except pexpect.TIMEOUT:
-                if time.time() > timeout:
-                    print('%s test timed out.\n' % self.test_uuid)
+                if self.test_timeout and time.time() > test_end:
+                    print('%s test timed out, killing test process.\n' % self.test_uuid)
+                    self.child.terminate(force=True)
                     break
                 else:
                     continue
@@ -197,9 +198,9 @@ class ResultPaser(object):
         self.results['id'] = self.test_uuid.split('_')[1]
 
     def run(self):
-        if not self.pattern:
-            self.parse_lava_test_case()
-        else:
+        self.parse_lava_test_case()
+        if self.pattern:
+            print('Parse pattern: %s' % self.pattern)
             self.parse_pattern()
 
         self.dict_to_json()
@@ -228,11 +229,10 @@ class ResultPaser(object):
         self.results['metrics'] = self.metrics
 
     def parse_pattern(self):
-        print self.pattern
         with open('%s/stdout.log' % self.result_path, 'r') as f:
             for line in f:
                 data = {}
-                m = re.match(r'%s' % self.pattern, line)
+                m = re.search(r'%s' % self.pattern, line)
                 if m:
                     data = m.groupdict()
 
@@ -257,8 +257,37 @@ class ResultPaser(object):
             for metric in self.results['metrics']:
                 writer.writerow(metric)
 
+# Parse arguments.
+parser = argparse.ArgumentParser()
+parser.add_argument('-o', '--output', default='/result', dest='LAVA_PATH',
+                    help='Specify a directory store test and result files.')
+parser.add_argument('-r', '--repo', dest='git_repo',
+                    default='https://git.linaro.org/qa/test-definitions.git',
+                    help='Specify url of test definitions git repo.')
+parser.add_argument('-d', '--test', required=True, dest='test_def',
+                    help='''
+                    Specify relative path to test deinition full name.
+                    Format example: "ubuntu/smoke-tests-basic.yaml"
+                    ''')
+parser.add_argument('-t', '--timeout', type=int, default=None,
+                    dest='test_timeout', help='Specify test timeout')
+parser.add_argument('-s', '--skip_install', dest='skip_install',
+                    default=False, action='store_true',
+                    help='Specify url of test definitions git repo.')
 
-# Test config.
+args = parser.parse_args()
+
+# Test Config
+LAVA_PATH = args.LAVA_PATH.rstrip('/')
+git_repo = args.git_repo
+test_def = args.test_def
+test_timeout = args.test_timeout
+skip_install = args.skip_install
+
+repo_name = os.path.splitext(git_repo.split('/')[-1])[0]
+if not os.path.exists(repo_name):
+    subprocess.call(['git', 'clone', git_repo])
+
 uuid = str(uuid4())
 test_name = os.path.splitext(test_def.split('/')[-1])[0]
 test_uuid = test_name + '_' + uuid
@@ -266,11 +295,7 @@ bin_path = LAVA_PATH + '/bin'
 test_path = LAVA_PATH + '/tests/' + test_uuid
 result_path = LAVA_PATH + '/results/' + test_uuid
 
-repo_name = os.path.splitext(git_repo.split('/')[-1])[0]
-if not os.path.exists(repo_name):
-    subprocess.call(['git', 'clone', git_repo])
-
-# Create a hierarchy of directories and files needed.
+# Create a hierarchy of directories and generate files needed.
 setup = TestSetup()
 setup.copy_test_repo()
 setup.create_test_runner_conf()
@@ -290,5 +315,5 @@ test_run = TestRunner()
 test_run.check_output()
 
 # Parse test output, save results in json and csv format.
-parser = ResultPaser()
-parser.run()
+result_parser = ResultPaser()
+result_parser.run()
