@@ -1,15 +1,14 @@
 #!/bin/sh
 
-if [ -x /usr/bin/lsb_release ]
+if [ -f /etc/issue ]
 then
-    /usr/bin/lsb_release -d | sed -e 's/^Description:\s*//'
+    cat /etc/issue | sed -e 's/\\n.\\l//' | tr -s '\n' '\n' | dd bs=100 count=1
     exit 0
 fi
 
-if [ -f /etc/lsb-release ]
+if [ -x /usr/bin/lsb_release ]
 then
-    . /etc/lsb-release
-    echo $DISTRIB_DESCRIPTION
+    /usr/bin/lsb_release -d
     exit 0
 fi
 
@@ -18,3 +17,13 @@ then
     cat /etc/debian_version
     exit 0
 fi
+
+SHELL=`readlink /proc/$$/exe`
+
+if [ "$SHELL" != "${SHELL%busybox*}" ]
+then
+    echo "busybox system"
+    exit 0
+fi
+
+echo 'Unsupported distro: cannot determine build version'

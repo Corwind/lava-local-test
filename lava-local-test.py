@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import sys
 import os
+import platform
 import glob
 import shutil
 import time
@@ -66,7 +67,6 @@ class TestDefinition(object):
             if 'deps' in install_options:
                 deps = self.testdef['install'].get('deps', [])
                 if deps:
-                    # TODO: distro-specific dependencies
                     f.write('lava-install-packages ')
                     for dep in deps:
                         f.write('%s ' % dep)
@@ -147,9 +147,16 @@ class TestSetup(object):
             f.write(self.test_path)
 
     def copy_bin_files(self):
-        # TODO: handle distro specific files.
         shutil.rmtree(self.bin_path, ignore_errors=True)
         shutil.copytree('lava_test_shell', self.bin_path, symlinks=True)
+
+        # Update script files by dist.
+        dist = platform.linux_distribution()[0].split(' ')[0].lower()
+        if dist in ['debian', 'ubuntu', 'oe', 'centos', 'fedora']:
+            for file in glob.glob('%s/distro/%s/*' % (self.bin_path, dist)):
+                shutil.copy(file, self.bin_path)
+        else:
+            print('Unsupported distro: no paltform context and package install support')
 
     def create_uuid_file(self):
         with open('%s/uuid' % self.test_path, 'w') as f:
@@ -162,6 +169,7 @@ class TestRunner(object):
         self.test_uuid = test_uuid
         self.test_timeout = test_timeout
         print('\nAbout to run %s' % self.test_uuid)
+        print('Test files and results will be saved to LAVA_PATH:')
         self.child = pexpect.spawn('%s/bin/lava-test-runner %s' % (self.lava_path, self.lava_path))
 
     def check_output(self):
@@ -189,7 +197,6 @@ class ResultPaser(object):
         self.result_path = result_path
         # Fix result path with timestamp added by lava-test-runner.
         self.result_path = glob.glob('%s-[0-9]*' % self.result_path)[0]
-        # TODO: handle result parser dfined in testdef
         self.pattern = pattern
         self.metrics = []
         self.results = {}
