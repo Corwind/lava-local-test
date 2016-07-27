@@ -126,7 +126,7 @@ class TestDefinition(object):
 
 class TestSetup(object):
     def __init__(self):
-        self.repo_name = repo_name
+        self.repo_path = repo_path
         self.test_name = test_name
         self.uuid = uuid
         self.test_uuid = test_uuid
@@ -136,7 +136,7 @@ class TestSetup(object):
 
     def copy_test_repo(self):
         shutil.rmtree(self.test_path, ignore_errors=True)
-        shutil.copytree(self.repo_name, self.test_path, symlinks=True)
+        shutil.copytree(self.repo_path, self.test_path, symlinks=True)
 
     def create_dir(self):
         if not os.path.exists(self.test_path):
@@ -169,7 +169,6 @@ class TestRunner(object):
         self.test_uuid = test_uuid
         self.test_timeout = test_timeout
         print('\nAbout to run %s' % self.test_uuid)
-        print('Test files and results will be saved to LAVA_PATH:')
         self.child = pexpect.spawn('%s/bin/lava-test-runner %s' % (self.lava_path, self.lava_path))
 
     def check_output(self):
@@ -212,7 +211,10 @@ class ResultPaser(object):
 
         self.dict_to_json()
         self.dict_to_csv()
-        print('Result files saved to: %s\n' % self.result_path)
+        print('\nResult files saved to: %s' % self.result_path)
+        print('---Printing results.csv---')
+        with open('%s/results.csv' % self.result_path) as f:
+            print(f.read())
 
     def parse_lava_test_case(self):
         with open('%s/stdout.log' % self.result_path, 'r') as f:
@@ -267,40 +269,70 @@ class ResultPaser(object):
 # Parse arguments.
 parser = argparse.ArgumentParser()
 parser.add_argument('-o', '--output', default='/result', dest='LAVA_PATH',
-                    help='Specify a directory store test and result files.')
-parser.add_argument('-r', '--repo', dest='git_repo',
+                    help='''
+                    specify a directory to store test and result files.
+                    Default: /result
+                    ''')
+parser.add_argument('-r', '--repo', dest='repo',
                     default='https://git.linaro.org/qa/test-definitions.git',
-                    help='Specify url of test definitions git repo.')
+                    help='''
+                    specify url or local path of test definitions repo.
+                    Default: https://git.linaro.org/qa/test-definitions.git
+                    ''')
 parser.add_argument('-d', '--test', required=True, dest='test_def',
                     help='''
-                    Specify relative path to test deinition full name.
+                    base on test definition repo location, specify relative path
+                    to the test definition to run.
                     Format example: "ubuntu/smoke-tests-basic.yaml"
                     ''')
 parser.add_argument('-t', '--timeout', type=int, default=None,
                     dest='test_timeout', help='Specify test timeout')
 parser.add_argument('-s', '--skip_install', dest='skip_install',
                     default=False, action='store_true',
-                    help='Specify url of test definitions git repo.')
+                    help='skip install section defined in test definition.')
 
 args = parser.parse_args()
 
-# Test Config
-LAVA_PATH = args.LAVA_PATH.rstrip('/')
-git_repo = args.git_repo
+# Obtain values from arguments.
+LAVA_PATH = args.LAVA_PATH
+repo = args.repo
 test_def = args.test_def
 test_timeout = args.test_timeout
 skip_install = args.skip_install
 
-repo_name = os.path.splitext(git_repo.split('/')[-1])[0]
-if not os.path.exists(repo_name):
-    subprocess.call(['git', 'clone', git_repo])
+# If repo points to remote url, clone the latest code.
+# If repo points to a local repo and it exists, use it.
+if repo.startswith(('http', 'git', 'ssh')):
+    repo_name = os.path.splitext(repo.split('/')[-1])[0]
+    if os.path.exists(repo_name):
+        shutil.rmtree(repo_name)
+    subprocess.call(['git', 'clone', repo])
+    repo_path = os.path.realpath(repo_name)
+elif os.path.exists(repo):
+    repo_path = os.path.realpath(repo)
+elif not os.path.exists(repo):
+    print('%s NOT exists, exiting...' % repo)
+    sys.exit(1)
 
+test_def_path = os.path.join(repo_path, test_def)
+if not os.path.exists(test_def_path):
+    print(' %s NOT found, exiting...' % test_def_path)
+    sys.exit(1)
+else:
+    print('Test definition: %s' % test_def_path)
+
+# Fixup related variables.
 uuid = str(uuid4())
 test_name = os.path.splitext(test_def.split('/')[-1])[0]
+print('Test name: %s' % test_name)
 test_uuid = test_name + '_' + uuid
-bin_path = LAVA_PATH + '/bin'
-test_path = LAVA_PATH + '/tests/' + test_uuid
-result_path = LAVA_PATH + '/results/' + test_uuid
+print('Test UUID: %s' % test_uuid)
+bin_path = os.path.join(LAVA_PATH, 'bin')
+print('Binary path: %s' % bin_path)
+test_path = os.path.join(LAVA_PATH, 'tests', test_uuid)
+print('Test path: %s' % test_path)
+result_path = os.path.join(LAVA_PATH, 'results', test_uuid)
+print('Result path: %s' % result_path)
 
 # Create a hierarchy of directories and generate files needed.
 setup = TestSetup()
