@@ -1,0 +1,29 @@
+# support remote and local repo
+repository: https://git.linaro.org/qa/test-definitions.git
+# repository: ./test-definitions
+definitions:
+  - path: ubuntu/smoke-tests-basic.yaml
+    timeout: 180
+  - path: ubuntu/blogbench.yaml
+    timeout: 1800
+    parameters:
+        ITERATION: 3
+  - path: ubuntu/pi-stress-test.yaml
+    timeout: 1800
+    params:
+        DURATION: 30
+  - path: ubuntu/pi-stress-test.yaml
+    timeout: 1800
+    params:
+        DURATION: 30
+        GROUP: 1
+    skip_install: True
+  - path: ubuntu/ltp.yaml
+    timeout: 3600
+    params:
+       TST_CMDFILES: math
+  - path: ubuntu/ltp.yaml
+    timeout: 3600
+    params:
+       TST_CMDFILES: timers
+    skip_install: True
