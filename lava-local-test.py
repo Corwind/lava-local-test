@@ -205,17 +205,17 @@ class TestRunner(object):
         if self.test_timeout:
             print('Test timeout: %s' % self.test_timeout)
             test_end = time.time() + self.test_timeout
+
         while self.child.isalive():
+            if self.test_timeout and time.time() > test_end:
+                print('%s test timed out, killing test process.\n' % self.test_uuid)
+                self.child.terminate(force=True)
+                break
             try:
                 self.child.expect('\n')
                 print(self.child.before)
             except pexpect.TIMEOUT:
-                if self.test_timeout and time.time() > test_end:
-                    print('%s test timed out, killing test process.\n' % self.test_uuid)
-                    self.child.terminate(force=True)
-                    break
-                else:
-                    continue
+                continue
             except pexpect.EOF:
                 print('%s test finished.\n' % self.test_uuid)
                 break
@@ -305,7 +305,7 @@ class ResultPaser(object):
 
 # Parse arguments.
 parser = argparse.ArgumentParser()
-parser.add_argument('-o', '--output', default='/result', dest='LAVA_PATH',
+parser.add_argument('-o', '--output', default='./output', dest='LAVA_PATH',
                     help='''
                     specify a directory to store test and result files.
                     Default: /result
@@ -336,7 +336,7 @@ parser.add_argument('-s', '--skip_install', dest='skip_install',
 args = parser.parse_args()
 
 # Obtain values from arguments.
-LAVA_PATH = args.LAVA_PATH
+LAVA_PATH = os.path.realpath(args.LAVA_PATH)
 agenda = args.agenda
 repo = args.repo
 test_def = args.test_def

@@ -1,6 +1,6 @@
-# support remote and local repo
-repository: https://git.linaro.org/qa/test-definitions.git
+# Support remote and local repo
 # repository: ./test-definitions
+repository: https://git.linaro.org/qa/test-definitions.git
 definitions:
   - path: ubuntu/smoke-tests-basic.yaml
     timeout: 180
